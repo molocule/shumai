@@ -49,7 +49,7 @@ export class pole {
         return (1.0 / (1.0 + Math.exp(-1 * Math.max(-50.0, Math.min(s, 50.0)))))
     }
 
-    get_box(state) {
+    get_box() {
         let box = 0
         const x = this.state[0]
         const x_dot = this.state[1]
@@ -120,7 +120,7 @@ export class pole {
         let steps = 0
         let failures = 0
 
-        let box = this.get_box(this.state)
+        let box = this.get_box()
 
         while (steps++ < this.MAX_STEPS && failures < this.MAX_FAILURES) {
             const y = (Math.random() < this.prob_push_right(this.w.index([box]).valueOf()))
@@ -129,12 +129,9 @@ export class pole {
             const xbar_o = sm.full([1], (1.0 - this.LAMBDAv))
             this.xbar = this.xbar.indexedAssign(xbar_o, [box])
 
-            // console.log(this.w.index([box]).valueOf())
-            // console.log(this.prob_push_right(this.w.index([box])))
-
             const oldp = this.v.index([box])
-            this.cart_pole(y, this.state)
-            box = this.get_box(this.state)
+            this.cart_pole(y)
+            box = this.get_box()
             let r, p, failed
 
             if (box < 0) {
@@ -156,9 +153,9 @@ export class pole {
             this.w = sm.add(this.w, sm.mul(sm.scalar(this.ALPHA * rhat), this.e))
             this.v = sm.add(this.v, sm.mul(sm.scalar(this.BETA * rhat), this.xbar))
 
-           if (failed) {
-                this.e = sm.full([this.N_BOXES], 0)
-                this.xbar = sm.full([this.N_BOXES], 0)
+            if (failed) {
+                    this.e = sm.full([this.N_BOXES], 0)
+                    this.xbar = sm.full([this.N_BOXES], 0)
             } else {
                 this.e = sm.mul(sm.scalar(this.LAMBDAw), this.e)
                 this.xbar = sm.mul(sm.scalar(this.LAMBDAv), this.xbar)
