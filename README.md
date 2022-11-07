@@ -1,4 +1,3 @@
-
 <p align="center">
 <img width="375" alt="shumai_logo_light" src="https://user-images.githubusercontent.com/4842908/187270063-250a42b0-475e-4eb2-bc1e-2b6a54182577.png#gh-light-mode-only">
 <img width="375" alt="shumai_logo_dark" src="https://user-images.githubusercontent.com/4842908/187270061-99666d73-047c-4076-906c-f181c940244c.png#gh-dark-mode-only">
@@ -181,11 +180,6 @@ Once `bun` and `ArrayFire` are installed, install the package and backing libs w
 bun install @shumai/shumai
 ```
 
-^**Linux users can use the CPU backend** by swapping the required `package.json` dependency from `@shumai/linux_x64_shumai_flashlight` to `@shumai/linux_x64_shumai_flashlight_cpu`, i.e. running:
-```shell
-sed -i "s/linux_x64_shumai_flashlight/linux_x64_shumai_flashlight_cpu/g" package.json
-```
-
 ### Windows Support
 
 While not officially supported, Windows users have been successful leveraging [Docker](https://www.docker.com/) + [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) + Linux. Including CUDA support.
@@ -214,15 +208,15 @@ cd flashlight
 mkdir -p build
 cd build
 cmake .. \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \ # or as specified
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON  \
+  -DCMAKE_INSTALL_PREFIX=$HOME/usr \
+  -DFL_USE_ARRAYFIRE=ON \
   -DFL_ARRAYFIRE_USE_CPU=ON \
-  -DFL_ARRAYFIRE_USE_CUDA=OFF \
-  -DFL_BUILD_DISTRIBUTED=OFF \
   -DFL_USE_ONEDNN=OFF \
+  -DFL_BUILD_DISTRIBUTED=OFF \
   -DFL_BUILD_TESTS=OFF \
-  -DFL_BUILD_EXAMPLES=OFF \
-  -DFL_BUILD_SCRIPTS=OFF \
-  -DCMAKE_INSTALL_PREFIX=$HOME/usr/
+  -DFL_BUILD_EXAMPLES=OFF
 make -j$(nproc)
 make install
 ```

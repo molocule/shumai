@@ -209,7 +209,8 @@ op_aliases = {
   "greaterThan": ["gt"],
   "greaterThanEqual": ["gte"],
   "var": ["variance"],
-  "norm": ["normalize"]
+  "norm": ["normalize"],
+  "concatenate": ["concat"],
 }
 
 # ops that need inputs transposed to work correctly
@@ -217,6 +218,12 @@ op_aliases = {
 reverse_args_row_major = [
   "matmul",
 ]
+
+# ops that need to be replaced with another when g_row_major == true
+op_overwrite_row_major = {
+    "tril": "triu",
+    "triu": "tril"
+}
 
 # called directly after the base case
 c_overwrites = {
@@ -446,26 +453,27 @@ for op, args, ret in op_list:
       t = fl::reshape(t, shape);
     """
     if ret == "Tensor":
-        if op in reverse_args_row_major:
-          c_impl.append("if (g_row_major) {")
-          c_args_reversed = ", ".join(c_op_args[::-1])
-          c_impl.append(f"auto t = fl::{op}({c_args_reversed});")
-          if op in c_overwrites and not methods_only:
-              c_impl.append(c_overwrites[op](c_args_reversed))
-          if fix_keep_dims:
-            c_impl.append(keep_dims_fix)
-          c_impl.append(f"g_bytes_used += t.bytes();")
-          c_impl.append(f"return new fl::Tensor(t);")
-          c_impl.append("} else {")
-        c_impl.append(f"auto t = fl::{op}({c_args});")
+        c_impl.append("fl::Tensor t;")
+        if op in reverse_args_row_major or op in op_overwrite_row_major:
+            c_impl.append("if (g_row_major) {")
+            if op in reverse_args_row_major:
+                c_args_reversed = ", ".join(c_op_args[::-1])
+                if op in op_overwrite_row_major:
+                    c_impl.append(f"t = fl::{op_overwrite_row_major[op]}({c_args_reversed});")
+                else:
+                    c_impl.append(f"t = fl::{op}({c_args_reversed});")
+            else:  # op in op_overwrite_row_major
+                c_impl.append(f"t = fl::{op_overwrite_row_major[op]}({c_args});")
+            c_impl.append("} else {")
+        c_impl.append(f"t = fl::{op}({c_args});")
         if op in c_overwrites and not methods_only:
-          c_impl.append(c_overwrites[op](c_op_args))
+            c_impl.append(c_overwrites[op](c_op_args))
         if fix_keep_dims:
-          c_impl.append(keep_dims_fix)
+            c_impl.append(keep_dims_fix)
+        if op in reverse_args_row_major or op in op_overwrite_row_major:
+            c_impl.append("}")
         c_impl.append(f"g_bytes_used += t.bytes();")
         c_impl.append(f"return new fl::Tensor(t);")
-        if op in reverse_args_row_major:
-          c_impl.append("}")
         c_ret = "void*"
         ffi_ret = f"FFIType.{to_ffi['void*']}"
     else:
@@ -484,7 +492,7 @@ for op, args, ret in op_list:
         wrap_args = [('this', 'Tensor')] + wrap_args
         js_tensor_args = ["this"] + js_tensor_args
     js_ptr_args = [x[0] if x[1] != "Tensor" else f"{x[0]}.ptr" for x in wrap_args]
-    js_ptr_result = f"const _ptr = fl._{op}({', '.join(js_ptr_args)})"
+    js_ptr_result = f"const _ptr = fl._{op}.native({', '.join(js_ptr_args)})"
     js_provenance_args = '||'.join([f"{t}.provenance" for t in js_tensor_args] + [f"{tv}.reduce((r, c) => r || c.provenance, 0)" for tv in js_tensor_vector_args])
     js_requires_grad_args = '||'.join([f"{t}.requires_grad" for t in js_tensor_args] + [f"{tv}.reduce((r, c) => r || c.requires_grad, false)" for tv in js_tensor_vector_args])
     js_requires_grad_args = 'false' if len(js_requires_grad_args) == 0 else js_requires_grad_args
@@ -505,7 +513,7 @@ for op, args, ret in op_list:
     stats = collectStats([{','.join(js_tensor_args)}])
   }}
   if (requires_stats) {{
-    recorded_stat = [performance.now(), fl.bytesUsed()]
+    recorded_stat = [performance.now(), fl.bytesUsed.native()]
   }}
 
   {js_ptr_result}
@@ -514,7 +522,7 @@ for op, args, ret in op_list:
   if (requires_stats) {{
     const [t0, b0] = recorded_stat
     const dt = performance.now() - t0
-    const db = fl.bytesUsed() - b0
+    const db = fl.bytesUsed.native() - b0
     const s = getStack()
     if (s in stats) {{
       stats[s].time += dt
@@ -566,7 +574,10 @@ for op, args, ret in op_list:
     if supports_method:
         if op in comments:
             full_js_types.append(comments[op][1])
-        full_js_types.append(f"  {op}({', '.join(ts_sig[1:])}) : {to_ts[ret]};")
+        full_js_types.append(f"  {valid_js(op)}({', '.join(ts_sig[1:])}) : {to_ts[ret]};")
+        if op in op_aliases:
+            for alias in op_aliases[op]:
+                full_js_types.append(f"  {valid_js(alias)}({', '.join(ts_sig[1:])}) : {to_ts[ret]};")
     full_ffi.append(ffi)
     full_c.append(c)
 
@@ -589,7 +600,6 @@ if sys.argv[1] in ["js", "js_methods"]:
         # js_methods
         full_js = f"""\
 /* GENERATED CODE (gen_binding.py) */
-import {{ FFIType }} from 'bun:ffi'
 import {{ arrayArg }} from '../ffi/ffi_bind_utils'
 import {{ fl }} from '../ffi/ffi_flashlight'
 import {{ getStack, collectStats }} from './stats'
@@ -604,7 +614,6 @@ export const gen_tensor_op_shim = (_Tensor: new (...args: unknown[]) => Tensor) 
         # js
         full_js = f"""\
 /* GENERATED CODE (gen_binding.py) */
-import {{ FFIType }} from "bun:ffi"
 import {{ arrayArg }} from "../ffi/ffi_bind_utils"
 import {{ fl }} from "../ffi/ffi_flashlight"
 import {{ getStack, collectStats }} from './stats'

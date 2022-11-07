@@ -1,5 +1,5 @@
-import { expect, it, describe } from 'bun:test'
 import * as sm from '@shumai/shumai'
+import { describe, expect, it } from 'bun:test'
 import { expectArraysClose, isClose, isShape } from './utils'
 
 describe('mean', () => {
@@ -61,5 +61,45 @@ describe('mean', () => {
     const mean = sm.mean(t, [0, 1])
     expect(isShape(mean, [])).toBe(true)
     expectArraysClose(mean.toFloat32Array(), [7 / 6])
+  })
+  it('gradient', () => {
+    const t = sm
+      .tensor(new Float32Array([1, 2, 3, 0, 0, 1]))
+      .reshape([3, 2])
+      .requireGrad()
+    const result = sm.mean(t)
+    result.backward()
+    expect(isShape(t.grad, t.shape)).toBe(true)
+    expectArraysClose(t.grad.toFloat32Array(), [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6])
+  })
+  it('gradient (keepDims = true)', () => {
+    const t = sm
+      .tensor(new Float32Array([1, 2, 3, 0, 0, 1]))
+      .reshape([3, 2])
+      .requireGrad()
+    const result = sm.mean(t, [], true)
+    result.backward()
+    expect(isShape(t.grad, t.shape)).toBe(true)
+    expectArraysClose(t.grad.toFloat32Array(), [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6])
+  })
+  it('gradient, axis=[1]', () => {
+    const t = sm
+      .tensor(new Float32Array([1, 2, 3, 0, 0, 1]))
+      .reshape([3, 2])
+      .requireGrad()
+    const result = sm.mean(t, [1]).sum()
+    result.backward()
+    expect(isShape(t.grad, t.shape)).toBe(true)
+    expectArraysClose(t.grad.toFloat32Array(), [1 / 2, 1 / 2, 1 / 2, 1 / 2, 1 / 2, 1 / 2])
+  })
+  it('gradient, axis=[1] (keepDims = true)', () => {
+    const t = sm
+      .tensor(new Float32Array([1, 2, 3, 0, 0, 1]))
+      .reshape([3, 2])
+      .requireGrad()
+    const result = sm.mean(t, [1], true).sum()
+    result.backward()
+    expect(isShape(t.grad, t.shape)).toBe(true)
+    expectArraysClose(t.grad.toFloat32Array(), [1 / 2, 1 / 2, 1 / 2, 1 / 2, 1 / 2, 1 / 2])
   })
 })

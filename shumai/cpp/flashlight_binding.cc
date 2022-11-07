@@ -4,7 +4,6 @@
 #include <iostream>
 #include "flashlight/fl/autograd/Functions.h"
 #include "flashlight/fl/autograd/tensor/AutogradExtension.h"
-#include "flashlight/fl/autograd/tensor/AutogradExtensionBackends.h"
 #include "flashlight/fl/autograd/tensor/AutogradOps.h"
 #include "flashlight/fl/common/DynamicBenchmark.h"
 #include "flashlight/fl/nn/Init.h"
@@ -14,6 +13,7 @@
 #include "flashlight/fl/tensor/Index.h"
 #include "flashlight/fl/tensor/Init.h"
 #include "flashlight/fl/tensor/Random.h"
+#include "flashlight/fl/tensor/TensorAdapter.h"
 
 #define FMT_RESET "\033[0m"
 #define FMT_RED "\033[31m"
@@ -100,6 +100,21 @@ void* createTensor(void* shape_ptr, int64_t shape_len) {
     static_assert(sizeof(long long) == sizeof(int64_t));
     auto shape = arrayArg<long long>(shape_ptr, shape_len, g_row_major, false);
     auto* t = new fl::Tensor(fl::Shape(shape));
+    g_bytes_used += t->bytes();
+    return t;
+  } catch (std::exception const& e) {
+    HANDLE_EXCEPTION(e.what());
+  } catch (...) {
+    HANDLE_EXCEPTION("[unknown]");
+  }
+}
+
+void* tensorFromFloat16Buffer(int64_t numel, void* ptr) {
+  try {
+    LOCK_GUARD
+    auto* t = new fl::Tensor(
+        fl::Tensor::fromBuffer({numel}, (float*)ptr, fl::MemoryLocation::Host)
+            .astype(fl::dtype::f16));
     g_bytes_used += t->bytes();
     return t;
   } catch (std::exception const& e) {
@@ -252,8 +267,17 @@ void* tensorFromUint64Buffer(int64_t numel, void* ptr) {
 void destroyTensor(void* t, void* /*ignore*/) {
   LOCK_GUARD
   auto* tensor = reinterpret_cast<fl::Tensor*>(t);
-  g_bytes_used -= tensor->bytes();
+  if (tensor->hasAdapter()) {
+    g_bytes_used -= tensor->bytes();
+  }
   delete tensor;
+}
+
+void dispose(void* t) {
+  LOCK_GUARD
+  auto& tensor = *reinterpret_cast<fl::Tensor*>(t);
+  g_bytes_used -= tensor.bytes();
+  fl::detail::releaseAdapterUnsafe(tensor);
 }
 
 typedef void (*JSTypedArrayBytesDeallocator)(void* bytes,
@@ -279,17 +303,19 @@ bool isColMajor() {
   return !g_row_major;
 }
 
-void _save(void* t, char* cstr) {
+void _save(void* t, void* cstr_ptr, int length) {
   LOCK_GUARD
   auto* tensor = reinterpret_cast<fl::Tensor*>(t);
-  auto filename = std::string(cstr);
+  const char* cstr = reinterpret_cast<char*>(cstr_ptr);
+  auto filename = std::string(cstr, length);
   fl::save(filename, *tensor);
 }
 
-void* load(char* cstr) {
+void* load(void* cstr_ptr, int length) {
   try {
     LOCK_GUARD
-    auto filename = std::string(cstr);
+    const char* cstr = reinterpret_cast<char*>(cstr_ptr);
+    auto filename = std::string(cstr, length);
     fl::Tensor tensor;
     fl::load(filename, tensor);
     auto* t = new fl::Tensor(tensor);
@@ -418,7 +444,7 @@ float* _float16Buffer(void* t) {
   try {
     LOCK_GUARD
     auto* tensor = reinterpret_cast<fl::Tensor*>(t);
-    return tensor->astype(fl::dtype::f16).host<float>();
+    return tensor->astype(fl::dtype::f32).host<float>();
   } catch (std::exception const& e) {
     HANDLE_EXCEPTION(e.what());
   } catch (...) {
@@ -443,6 +469,18 @@ float* _float64Buffer(void* t) {
     LOCK_GUARD
     auto* tensor = reinterpret_cast<fl::Tensor*>(t);
     return tensor->astype(fl::dtype::f64).host<float>();
+  } catch (std::exception const& e) {
+    HANDLE_EXCEPTION(e.what());
+  } catch (...) {
+    HANDLE_EXCEPTION("[unknown]");
+  }
+}
+
+int* _boolInt8Buffer(void* t) {
+  try {
+    LOCK_GUARD
+    auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+    return tensor->astype(fl::dtype::b8).host<int>();
   } catch (std::exception const& e) {
     HANDLE_EXCEPTION(e.what());
   } catch (...) {
@@ -534,10 +572,70 @@ unsigned* _uint64Buffer(void* t) {
   }
 }
 
-float _scalar(void* t) {
+float _float16Scalar(void* t) {
   LOCK_GUARD
   auto* tensor = reinterpret_cast<fl::Tensor*>(t);
-  return tensor->scalar<float>();
+  return tensor->asScalar<float>();
+}
+
+float _float32Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<float>();
+}
+
+float _float64Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<float>();
+}
+
+char _boolInt8Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<char>();
+}
+
+int16_t _int16Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<int16_t>();
+}
+
+int32_t _int32Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<int32_t>();
+}
+
+int64_t _int64Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<int64_t>();
+}
+
+uint8_t _uint8Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<uint8_t>();
+}
+
+uint16_t _uint16Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<uint16_t>();
+}
+
+uint32_t _uint32Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<uint32_t>();
+}
+
+uint64_t _uint64Scalar(void* t) {
+  LOCK_GUARD
+  auto* tensor = reinterpret_cast<fl::Tensor*>(t);
+  return tensor->asScalar<uint64_t>();
 }
 
 void* _index(void* t,
@@ -712,11 +810,9 @@ void* _conv2dBackwardData(void* grad_in,
 
     auto payload = std::make_shared<fl::detail::AutogradPayload>();
     std::shared_ptr<fl::DynamicBenchmark> dataBench;
-    auto result =
-        used_in->backend()
-            .getExtension<fl::AutogradExtension>()
-            .conv2dBackwardData(*used_grad_in, *used_in, *used_wt, sx, sy, px,
-                                py, dx, dy, groups, dataBench, payload);
+    auto result = fl::detail::conv2dBackwardData(
+        *used_grad_in, *used_in, *used_wt, sx, sy, px, py, dx, dy, groups,
+        dataBench, payload);
 
     g_bytes_used += result.bytes();
     return new fl::Tensor(result);
